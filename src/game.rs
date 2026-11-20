@@ -26,7 +26,7 @@ impl Game {
             Mark::O
         }
     }
-    pub fn winner(&self) -> Option<Mark> {
+    pub fn winning_line(&self) -> Option<[usize; 3]> {
         for [a, b, c] in [
             [0, 1, 2],
             [3, 4, 5],
@@ -41,10 +41,13 @@ impl Game {
                 && self.cells[a] == self.cells[b]
                 && self.cells[b] == self.cells[c]
             {
-                return self.cells[a];
+                return Some([a, b, c]);
             }
         }
         None
+    }
+    pub fn winner(&self) -> Option<Mark> {
+        self.winning_line().and_then(|line| self.cells[line[0]])
     }
     pub fn finished(&self) -> bool {
         self.winner().is_some() || self.moves == 9
@@ -68,6 +71,25 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identifies_each_winning_line() {
+        for line in [
+            [0, 1, 2],
+            [3, 4, 5],
+            [6, 7, 8],
+            [0, 3, 6],
+            [1, 4, 7],
+            [2, 5, 8],
+            [0, 4, 8],
+            [2, 4, 6],
+        ] {
+            let mut game = Game::default();
+            for index in line {
+                game.cells[index] = Some(Mark::O);
+            }
+            assert_eq!(game.winning_line(), Some(line));
+        }
+    }
     #[test]
     fn rules_and_win() {
         let mut g = Game::default();

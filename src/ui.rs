@@ -12,10 +12,10 @@ const O: Color = Color::Rgb(245, 160, 185);
 
 pub fn cells(area: Rect) -> Vec<Rect> {
     let width = area.width.min(39);
-    let height = area.height.saturating_sub(8).min(15);
+    let height = area.height.saturating_sub(10).min(15);
     let board = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
-        area.y + 4,
+        area.y + 6,
         width,
         height,
     );
@@ -77,6 +77,7 @@ pub fn draw(
     info: bool,
     can_copy: bool,
     copy_notice: &str,
+    animation: std::time::Duration,
 ) {
     let area = frame.area();
     frame.render_widget(
@@ -99,10 +100,30 @@ pub fn draw(
         title,
     );
     let outcome = outcome(game, role);
-    frame.render_widget(
-        Paragraph::new(outcome).centered().fg(MUTED),
-        Rect::new(area.x, area.y + 2, area.width, 1),
-    );
+    if game.winner().is_some() {
+        let label = if outcome == "You won" {
+            "YOU WON"
+        } else if outcome == "You lost" {
+            "YOU LOSE"
+        } else if game.winner() == Some(Mark::X) {
+            "X WINS"
+        } else {
+            "O WINS"
+        };
+        let color = if outcome == "You lost" { O } else { X };
+        frame.render_widget(
+            Paragraph::new(crate::celebration::banner(label))
+                .centered()
+                .fg(color)
+                .bold(),
+            Rect::new(area.x, area.y + 2, area.width, 3),
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(outcome).centered().fg(MUTED),
+            Rect::new(area.x, area.y + 2, area.width, 1),
+        );
+    }
     let targets = cells(area);
     let first = targets[0];
     let last = targets[8];
@@ -137,7 +158,9 @@ pub fn draw(
     }
     for (index, rect) in cells(area).iter().enumerate() {
         let mark = game.cells[index];
-        let winner = mark.is_some() && mark == game.winner();
+        let winner = game
+            .winning_line()
+            .is_some_and(|line| line.contains(&index));
         let color = match mark {
             Some(Mark::X) => X,
             Some(Mark::O) => O,
@@ -161,7 +184,7 @@ pub fn draw(
         if inner.height >= 3 && mark.is_some() {
             frame.render_widget(
                 Paragraph::new(glyph).centered().fg(color).bold(),
-                Rect::new(inner.x, inner.y + (inner.height - 3) / 2, inner.width, 3),
+                Rect::new(inner.x, inner.y + inner.height / 2 - 1, inner.width, 3),
             );
         } else {
             let text = mark
@@ -173,6 +196,7 @@ pub fn draw(
             );
         }
     }
+    crate::celebration::draw_line(frame, game, &targets, animation);
     let quiet = status == "Move accepted."
         || status.starts_with("Ready.")
         || status.starts_with("Connected.");
@@ -279,6 +303,7 @@ mod tests {
                             info,
                             true,
                             "",
+                            std::time::Duration::ZERO,
                         )
                     })
                     .unwrap();

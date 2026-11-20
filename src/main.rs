@@ -1,3 +1,4 @@
+mod celebration;
 mod clipboard;
 mod game;
 mod invitation;
@@ -73,11 +74,7 @@ fn main() -> io::Result<()> {
                 });
             }
             let command = invitation::command(local_address, &invitation)?;
-            local_command = Some(if std::path::Path::new("Cargo.toml").exists() {
-                command.replacen("tictactoe", "cargo run --", 1)
-            } else {
-                command
-            });
+            local_command = Some(command);
             join_command = invitation::command(address, &invitation).ok();
             details = "Invite a friend".into();
         }
@@ -114,6 +111,7 @@ fn main() -> io::Result<()> {
     let mut selected = 0;
     let mut status = "Ready. Waiting for players if hosting.".to_string();
     let mut joined = false;
+    let mut won_at = None;
     let mut terminal = ratatui::init();
     let mut info = host.is_some();
     let result = (|| -> io::Result<()> {
@@ -138,6 +136,11 @@ fn main() -> io::Result<()> {
                     Err(_) => break,
                 }
             }
+            if game.winner().is_some() {
+                won_at.get_or_insert_with(std::time::Instant::now);
+            } else {
+                won_at = None;
+            }
             terminal.draw(|frame| {
                 ui::draw(
                     frame,
@@ -149,6 +152,7 @@ fn main() -> io::Result<()> {
                     info,
                     local_command.is_some(),
                     &copy_notice,
+                    won_at.map(|start| start.elapsed()).unwrap_or_default(),
                 )
             })?;
             if !event::poll(Duration::from_millis(100))? {
