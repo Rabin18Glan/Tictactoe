@@ -2,5 +2,20 @@
 name = "tictactoe"
 version = "0.1.0"
 edition = "2024"
+description = "A terminal tic-tac-toe game with direct TCP multiplayer"
+license = "MIT"
+repository = "https://github.com/Rabin18Glan/Tictactoe"
 
 [dependencies]
+ratatui = "0.30.2"
+crossterm = "0.29"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+arboard = { version = "3.7.0", default-features = false }
+base64 = "0.23.1"
+
+[profile.dev]
+debug = 0
+incremental = false
