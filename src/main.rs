@@ -54,6 +54,7 @@ fn main() -> io::Result<()> {
     let mut guest = None;
     let mut details = String::new();
     let mut join_command = None;
+    let mut local_command = None;
     let mut clipboard = clipboard::Clipboard::default();
     let mut copy_notice = String::new();
     let role;
@@ -62,17 +63,23 @@ fn main() -> io::Result<()> {
             let invitation = uuid::Uuid::new_v4().to_string();
             host = Some(Host::bind(&bind, invitation.clone())?);
             role = "Host / X";
-            match invitation::command(host.as_ref().unwrap().address()?, &invitation) {
-                Ok(command) => {
-                    details = format!("Local network · share with your friend\n\n{command}");
-                    join_command = Some(command);
-                }
-                Err(_) => {
-                    details = format!(
-                        "Could not detect IP. Use your reachable IP and port.\nInvitation: {invitation}"
-                    )
-                }
+            let address = host.as_ref().unwrap().address()?;
+            let mut local_address = address;
+            if address.ip().is_unspecified() {
+                local_address.set_ip(if address.is_ipv4() {
+                    std::net::Ipv4Addr::LOCALHOST.into()
+                } else {
+                    std::net::Ipv6Addr::LOCALHOST.into()
+                });
             }
+            let command = invitation::command(local_address, &invitation)?;
+            local_command = Some(if std::path::Path::new("Cargo.toml").exists() {
+                command.replacen("tictactoe", "cargo run --", 1)
+            } else {
+                command
+            });
+            join_command = invitation::command(address, &invitation).ok();
+            details = "Invite a friend".into();
         }
         Some(Mode::Join {
             address,
@@ -113,7 +120,11 @@ fn main() -> io::Result<()> {
         crossterm::execute!(io::stdout(), EnableMouseCapture)?;
         loop {
             if let Some(h) = &mut host {
+                let was_connected = h.connected();
                 h.tick(&mut game, &mut status)?;
+                if !was_connected && h.connected() {
+                    info = false;
+                }
             }
             if let Some(g) = &mut guest {
                 match g.receive::<Snapshot>() {
@@ -124,11 +135,7 @@ fn main() -> io::Result<()> {
                             status = snapshot.message;
                         }
                     }
-                    Err(_) => {
-                        guest = None;
-                        joined = false;
-                        status = "Disconnected. Quit and rerun the join command to resume.".into();
-                    }
+                    Err(_) => break,
                 }
             }
             terminal.draw(|frame| {
@@ -140,7 +147,7 @@ fn main() -> io::Result<()> {
                     &status,
                     &details,
                     info,
-                    join_command.is_some(),
+                    local_command.is_some(),
                     &copy_notice,
                 )
             })?;
@@ -158,14 +165,15 @@ fn main() -> io::Result<()> {
                 }
                 Event::Mouse(mouse)
                     if info
-                        && join_command.is_some()
+                        && local_command.is_some()
                         && mouse.kind == MouseEventKind::Down(MouseButton::Left) =>
                 {
                     let size = terminal.size()?;
-                    if ui::copy_button(ratatui::layout::Rect::new(0, 0, size.width, size.height))
-                        .contains((mouse.column, mouse.row).into())
-                    {
-                        KeyCode::Char('c')
+                    let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+                    if ui::copy_button(area, 0).contains((mouse.column, mouse.row).into()) {
+                        KeyCode::Char('1')
+                    } else if ui::copy_button(area, 1).contains((mouse.column, mouse.row).into()) {
+                        KeyCode::Char('2')
                     } else {
                         continue;
                     }
@@ -192,13 +200,19 @@ fn main() -> io::Result<()> {
                 }
                 _ => continue,
             };
-            if info && code == KeyCode::Char('c') {
-                if let Some(command) = &join_command {
-                    copy_notice = clipboard
+            if info && matches!(code, KeyCode::Char('1' | '2')) {
+                let command = if code == KeyCode::Char('1') {
+                    &local_command
+                } else {
+                    &join_command
+                };
+                copy_notice = match command {
+                    Some(command) => clipboard
                         .copy(command)
                         .unwrap_or("Clipboard unavailable")
-                        .into();
-                }
+                        .into(),
+                    None => "Network address unavailable".into(),
+                };
                 continue;
             }
             if code == KeyCode::Char('i') || (info && code == KeyCode::Esc) {

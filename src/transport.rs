@@ -33,6 +33,7 @@ impl Connection {
         let mut buffer = [0; 4096];
         loop {
             match self.stream.read(&mut buffer) {
+                Ok(0) if self.input.contains(&b'\n') => break,
                 Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::ConnectionAborted,
@@ -55,5 +56,43 @@ impl Connection {
             messages.push(serde_json::from_slice(&line[..end])?);
         }
         Ok(messages)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn detects_host_shutdown_after_delivering_final_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut guest =
+            Connection::new(TcpStream::connect(listener.local_addr().unwrap()).unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut host = Connection::new(stream).unwrap();
+        host.send(&"final state").unwrap();
+        host.stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut delivered = false;
+        loop {
+            match guest.receive::<String>() {
+                Ok(messages) => {
+                    if messages == ["final state"] {
+                        delivered = true;
+                    }
+                }
+                Err(error) => {
+                    assert!(delivered);
+                    assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Host shutdown was not detected"
+            );
+            std::thread::yield_now();
+        }
     }
 }

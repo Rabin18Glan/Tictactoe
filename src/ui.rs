@@ -1,7 +1,7 @@
 use crate::game::{Game, Mark};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Color, Style, Stylize},
     widgets::{Block, BorderType, Clear, Paragraph, Wrap},
 };
@@ -19,21 +19,48 @@ pub fn cells(area: Rect) -> Vec<Rect> {
         width,
         height,
     );
-    let rows = Layout::vertical([Constraint::Ratio(1, 3); 3]).split(board);
-    rows.iter()
-        .flat_map(|row| {
-            Layout::horizontal([Constraint::Ratio(1, 3); 3])
-                .split(*row)
-                .to_vec()
+    let cell_width = board.width.saturating_sub(2) / 3;
+    let cell_height = board.height.saturating_sub(2) / 3;
+    (0..9)
+        .map(|i| {
+            Rect::new(
+                board.x + (i % 3) * (cell_width + 1),
+                board.y + (i / 3) * (cell_height + 1),
+                cell_width,
+                cell_height,
+            )
         })
         .collect()
 }
 
-pub fn copy_button(area: Rect) -> Rect {
+fn outcome(game: &Game, role: &str) -> String {
+    let player = if role.starts_with("Host") {
+        Some(Mark::X)
+    } else if role.starts_with("Guest") {
+        Some(Mark::O)
+    } else {
+        None
+    };
+    if let Some(winner) = game.winner() {
+        match player {
+            Some(p) if p == winner => "You won".into(),
+            Some(_) => "You lost".into(),
+            None => format!("{} won", winner.label()),
+        }
+    } else if game.finished() {
+        "Draw".into()
+    } else if player.is_none_or(|p| p == game.turn()) {
+        "Your turn".into()
+    } else {
+        "Friend’s turn".into()
+    }
+}
+
+pub fn copy_button(area: Rect, index: u16) -> Rect {
     let width = area.width.min(76).saturating_sub(4);
     Rect::new(
         area.x + (area.width - width) / 2 + 2,
-        area.y + area.height.saturating_sub(13) / 2 + 10,
+        area.y + area.height.saturating_sub(13) / 2 + 4 + index * 3,
         width.saturating_sub(4),
         1,
     )
@@ -71,19 +98,43 @@ pub fn draw(
             .fg(X),
         title,
     );
-    let outcome = if let Some(winner) = game.winner() {
-        format!("{} wins!   ✦", winner.label())
-    } else if game.finished() {
-        "Draw — well played".into()
-    } else {
-        format!("{}'s turn", game.turn().label())
-    };
+    let outcome = outcome(game, role);
     frame.render_widget(
-        Paragraph::new(format!("{role}   ·   {outcome}"))
-            .centered()
-            .fg(MUTED),
+        Paragraph::new(outcome).centered().fg(MUTED),
         Rect::new(area.x, area.y + 2, area.width, 1),
     );
+    let targets = cells(area);
+    let first = targets[0];
+    let last = targets[8];
+    for target in targets.iter().take(2) {
+        let x = target.right();
+        frame.render_widget(
+            Paragraph::new(
+                (first.y..last.bottom())
+                    .map(|_| "│")
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .fg(MUTED),
+            Rect::new(x, first.y, 1, last.bottom() - first.y),
+        );
+    }
+    for row in 0..2 {
+        let y = targets[row * 3].bottom();
+        let line: String = (first.x..last.right())
+            .map(|x| {
+                if x == targets[0].right() || x == targets[1].right() {
+                    '┼'
+                } else {
+                    '─'
+                }
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(line).fg(MUTED),
+            Rect::new(first.x, y, last.right() - first.x, 1),
+        );
+    }
     for (index, rect) in cells(area).iter().enumerate() {
         let mark = game.cells[index];
         let winner = mark.is_some() && mark == game.winner();
@@ -93,22 +144,15 @@ pub fn draw(
             None => MUTED,
         };
         let active = index == selected;
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(if active {
-                Color::White
-            } else if winner {
+        let inner = *rect;
+        frame.render_widget(
+            Block::default().style(Style::default().bg(Color::Rgb(15, 19, 29)).fg(if winner {
                 Color::Yellow
             } else {
-                Color::Rgb(45, 57, 77)
-            }))
-            .style(Style::default().bg(if active {
-                Color::Rgb(35, 46, 65)
-            } else {
-                Color::Rgb(20, 26, 38)
-            }));
-        let inner = block.inner(*rect);
-        frame.render_widget(block, *rect);
+                color
+            })),
+            *rect,
+        );
         let glyph = match mark {
             Some(Mark::X) => "╲ ╱\n ╳ \n╱ ╲",
             Some(Mark::O) => "╭─╮\n│ │\n╰─╯",
@@ -121,8 +165,8 @@ pub fn draw(
             );
         } else {
             let text = mark
-                .map(|m| m.label().to_string())
-                .unwrap_or_else(|| (index + 1).to_string());
+                .map(|m| m.label())
+                .unwrap_or(if active { "·" } else { "" });
             frame.render_widget(
                 Paragraph::new(text).centered().fg(color).bold(),
                 Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1),
@@ -161,20 +205,43 @@ pub fn draw(
             13,
         );
         frame.render_widget(Clear, popup);
-        frame.render_widget(Paragraph::new(if details.is_empty() { "Local two-player game\n\nTake turns on the same keyboard.\n\nPress i or Esc to close.".into() } else { format!("{details}\n\nShift+drag to select · i / Esc closes") }).wrap(Wrap { trim:false }).block(Block::bordered().border_type(BorderType::Rounded).title(" Session ").border_style(Style::default().fg(X))),popup);
+        let content = if can_copy {
+            "Invite a friend\n\n\n\n\n\n\nAnother computer: same network\n\ni / Esc closes"
+                .to_string()
+        } else if details.is_empty() {
+            "Local two-player game\n\nTake turns on the same keyboard.\n\ni / Esc closes".into()
+        } else {
+            format!("{details}\n\ni / Esc closes")
+        };
+        frame.render_widget(
+            Paragraph::new(content)
+                .centered()
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::bordered()
+                        .border_type(BorderType::Rounded)
+                        .title(" Session ")
+                        .border_style(Style::default().fg(X)),
+                ),
+            popup,
+        );
         if can_copy {
-            let label = if copy_notice.is_empty() {
-                "[ c  Copy command ]"
-            } else {
-                copy_notice
-            };
+            for (index, label) in ["[ 1  Same computer ]", "[ 2  Another computer ]"]
+                .iter()
+                .enumerate()
+            {
+                frame.render_widget(
+                    Paragraph::new(*label)
+                        .centered()
+                        .bold()
+                        .fg(Color::Black)
+                        .bg(X),
+                    copy_button(area, index as u16),
+                );
+            }
             frame.render_widget(
-                Paragraph::new(label)
-                    .centered()
-                    .bold()
-                    .fg(Color::Black)
-                    .bg(X),
-                copy_button(area),
+                Paragraph::new(copy_notice).centered().fg(X),
+                Rect::new(popup.x + 1, popup.y + 10, popup.width.saturating_sub(2), 1),
             );
         }
     }
@@ -184,6 +251,17 @@ pub fn draw(
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn turn_and_result_follow_each_players_perspective() {
+        let mut game = Game::default();
+        assert_eq!(outcome(&game, "Host / X"), "Your turn");
+        assert_eq!(outcome(&game, "Guest / O"), "Friend’s turn");
+        for cell in [0, 3, 1, 4, 2] {
+            game.play(game.turn(), cell).unwrap();
+        }
+        assert_eq!(outcome(&game, "Host / X"), "You won");
+        assert_eq!(outcome(&game, "Guest / O"), "You lost");
+    }
     #[test]
     fn renders_small_and_normal_terminals_with_matching_hit_targets() {
         for (width, height) in [(20, 10), (32, 18), (80, 24), (120, 40)] {
@@ -209,7 +287,7 @@ mod tests {
                 let targets = cells(Rect::new(0, 0, width, height));
                 assert_eq!(targets.len(), 9);
                 for target in targets {
-                    assert!(target.width >= 3 && target.height >= 3);
+                    assert!(target.width >= 3 && target.height >= 2);
                     assert!(target.bottom() <= height - 3);
                 }
             }
